@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>每日心情打卡 - HTML 版</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', sans-serif; }
@@ -27,6 +28,12 @@
         <div class="flex items-center gap-2">
             <div class="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center text-white font-bold">M</div>
             <h1 class="font-serif font-medium text-lg">MoodTracker (Local)</h1>
+        </div>
+        <div class="flex items-center">
+            <button onclick="handleAISummary()" id="aiBtn" class="flex items-center gap-2 bg-zinc-800 text-zinc-100 px-4 py-2 rounded-full font-medium hover:bg-zinc-700 transition-colors active:scale-95 border border-zinc-700 disabled:opacity-50 text-sm">
+                <i data-lucide="sparkles" class="w-4 h-4"></i>
+                <span id="aiBtnText">AI 摘要</span>
+            </button>
         </div>
     </header>
 
@@ -136,12 +143,40 @@
         let currentImageUrl = "";
         let currentFilter = "all";
 
-        // --- Backend Sync Helper ---
-        async function syncToSheet(payload) {
-            if (APPS_SCRIPT_URL === "PASTE_YOUR_APPS_SCRIPT_URL_HERE") {
-                console.warn("Google Apps Script URL is not configured. Skipping sync.");
-                return;
+        // --- Backend Sync Helpers ---
+        
+        // 統一前後端欄位差異 (同時保留 MoodTracker 需要的欄位以防報錯)
+        function normalizeRecord(record) {
+            return {
+                id: record.id || record.ID || "",
+                createdAt: record.createdAt || record.CreatedAt || "",
+                content: record.content || record.Content || record.note || "",
+                category: record.category || record.Category || "其他",
+                likes: Number(record.likes !== undefined ? record.likes : (record.Likes || 0)),
+                status: record.status || record.Status || "active",
+                // 保留 MoodTracker 特有欄位
+                mood: record.mood || record.Mood || "😊",
+                intensity: record.intensity || record.Intensity || 50,
+                tags: record.tags || record.Tags || [],
+                note: record.note || record.Note || record.content || record.Content || "",
+                imageUrl: record.imageUrl || record.ImageUrl || ""
+            };
+        }
+
+        async function fetchRecordsFromSheet() {
+            if (APPS_SCRIPT_URL.includes("PASTE")) return null;
+            try {
+                const res = await fetch(APPS_SCRIPT_URL);
+                const data = await res.json();
+                return Array.isArray(data.records) ? data.records.map(normalizeRecord) : null;
+            } catch (e) {
+                console.warn("從 Sheet 讀取失敗", e);
+                return null;
             }
+        }
+
+        async function syncToSheet(payload) {
+            if (APPS_SCRIPT_URL.includes("PASTE")) return;
             try {
                 const response = await fetch(APPS_SCRIPT_URL, {
                     method: "POST",
@@ -156,39 +191,78 @@
             }
         }
 
-        // --- Core Functions (Requirement 6) ---
-
-        function saveData(newRecord) {
-            const records = loadData();
-            records.unshift(newRecord);
-            localStorage.setItem(LS_KEY, JSON.stringify(records));
-            
-            // Sync to backend (Create)
-            syncToSheet({ action: "create", record: newRecord });
+        // --- AI Helpers ---
+        
+        async function askAI(userPrompt) {
+            const res = await fetch(APPS_SCRIPT_URL, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify({ action: "askAI", prompt: userPrompt })
+            });
+            const data = await res.json();
+            return data.result || data.error || "AI 冇回應";
         }
 
-        function loadData() {
+        async function handleAISummary() {
+            const btn = document.getElementById('aiBtn');
+            const text = document.getElementById('aiBtnText');
+            btn.disabled = true;
+            text.textContent = '思考中...';
+            try {
+                const records = await loadData();
+                if (records.length === 0) { alert('未有資料可以摘要'); return; }
+                
+                // 兼容吐槽牆與心情打卡的資料結構
+                const summaryInput = records.slice(0, 30).map(r =>
+                    `[${r.category !== "其他" ? r.category : (r.tags && r.tags.length ? r.tags.join(',') : '其他')}] ${r.content || r.note || ''}`
+                ).join('\n');
+                
+                const prompt = '以下是班級吐槽牆嘅留言。請用繁體中文，用 3-5 句概括同學最關心嘅問題、情緒同有冇明顯 patterns:\n\n' + summaryInput;
+                const result = await askAI(prompt);
+                alert(result);
+            } catch (e) {
+                alert('AI 出錯：' + e.message);
+            } finally {
+                btn.disabled = false;
+                text.textContent = 'AI 摘要';
+                if (typeof lucide !== 'undefined') lucide.createIcons();
+            }
+        }
+
+        // --- Core Functions ---
+
+        async function loadData() {
+            const remote = await fetchRecordsFromSheet();
+            if (remote) {
+                localStorage.setItem(LS_KEY, JSON.stringify(remote));
+                return remote;
+            }
             const data = localStorage.getItem(LS_KEY);
             return data ? JSON.parse(data) : [];
         }
 
-        function renderList() {
-            const records = loadData();
+        async function saveData(newRecord) {
+            const records = await loadData();
+            records.unshift(newRecord); // 將新記錄加到最前
+            localStorage.setItem(LS_KEY, JSON.stringify(records));
+            syncToSheet({ action: "create", record: newRecord });
+            await renderList(records);
+        }
+
+        async function renderList(recordsOverride) {
+            const records = recordsOverride || await loadData();
             const listContainer = document.getElementById('recordList');
             
-            // Filter and Sort
             let filtered = records;
             if (currentFilter !== "all") {
                 filtered = records.filter(r => r.status === currentFilter);
             }
 
-            // Group by status for sorting requirement: active top, done bottom
             filtered.sort((a, b) => {
                 if (a.status === b.status) return new Date(b.createdAt) - new Date(a.createdAt);
                 return a.status === "active" ? -1 : 1;
             });
 
-            // Update Counts
             const activeCount = records.filter(r => r.status === "active").length;
             const doneCount = records.filter(r => r.status === "done").length;
             document.getElementById('countActive').innerText = activeCount;
@@ -224,7 +298,7 @@
                         ${record.note ? `<p class="text-sm text-stone-700 line-clamp-2">${record.note}</p>` : ''}
                         ${record.imageUrl ? `<img src="${record.imageUrl}" class="w-full h-32 object-cover rounded-xl border border-stone-100">` : ''}
                         <div class="flex flex-wrap gap-1">
-                            ${record.tags.map(tag => `<span class="text-[10px] px-2 py-0.5 bg-stone-100 text-stone-500 rounded-full">#${tag}</span>`).join('')}
+                            ${(record.tags || []).map(tag => `<span class="text-[10px] px-2 py-0.5 bg-stone-100 text-stone-500 rounded-full">#${tag}</span>`).join('')}
                         </div>
                     </div>
                 </div>
@@ -233,31 +307,32 @@
 
         // --- Logic Assistants ---
 
-        function toggleRecordStatus(id) {
-            const records = loadData();
+        async function toggleRecordStatus(id) {
+            const records = await loadData();
             const record = records.find(r => r.id === id);
             if (record) {
                 record.status = record.status === "active" ? "done" : "active";
                 localStorage.setItem(LS_KEY, JSON.stringify(records));
-                renderList();
-                
-                // Sync to backend (Update)
                 syncToSheet({ action: "update", id: record.id, changes: { status: record.status } });
+                await renderList(records);
             }
         }
 
-        function deleteRecord(id) {
+        async function deleteRecord(id) {
             if (!confirm("確定要刪除這條記錄嗎？")) return;
-            const records = loadData();
+            const records = await loadData();
             const filtered = records.filter(r => r.id !== id);
             localStorage.setItem(LS_KEY, JSON.stringify(filtered));
-            renderList();
-            
-            // Sync to backend (Delete)
             syncToSheet({ action: "delete", id: id });
+            await renderList(filtered);
         }
 
         // --- Initialization & Listeners ---
+
+        window.onload = async () => {
+            await renderList();
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+        };
 
         document.addEventListener('DOMContentLoaded', () => {
             // Render Tag Buttons
@@ -303,7 +378,7 @@
                 });
             });
 
-            // Image Handler (Base64 for LocalStorage)
+            // Image Handler
             document.getElementById('imageInput').addEventListener('change', (e) => {
                 const file = e.target.files[0];
                 if (file) {
@@ -322,8 +397,8 @@
                 document.getElementById('imagePreview').classList.add('hidden');
             });
 
-            // Form Submit
-            document.getElementById('moodForm').addEventListener('submit', (e) => {
+            // Form Submit (Async)
+            document.getElementById('moodForm').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 
                 const newRecord = {
@@ -333,11 +408,13 @@
                     intensity: parseInt(document.getElementById('intensity').value),
                     tags: [...selectedTags],
                     note: document.getElementById('note').value,
+                    content: document.getElementById('note').value, // 兼容寫入 content
                     imageUrl: currentImageUrl,
-                    status: "active"
+                    status: "active",
+                    likes: 0
                 };
 
-                saveData(newRecord);
+                await saveData(newRecord);
                 
                 // Reset UI State
                 document.getElementById('note').value = "";
@@ -350,13 +427,11 @@
                 });
                 selectedTags = [];
                 currentImageUrl = "";
-
-                renderList();
             });
 
-            // Filter Management
+            // Filter Management (Async)
             document.querySelectorAll('.filter-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
+                btn.addEventListener('click', async () => {
                     document.querySelectorAll('.filter-btn').forEach(b => {
                         b.classList.remove('bg-white', 'text-stone-900', 'shadow-sm');
                         b.classList.add('text-stone-400', 'hover:text-stone-600');
@@ -364,11 +439,9 @@
                     btn.classList.add('bg-white', 'text-stone-900', 'shadow-sm');
                     btn.classList.remove('text-stone-400', 'hover:text-stone-600');
                     currentFilter = btn.dataset.filter;
-                    renderList();
+                    await renderList();
                 });
             });
-
-            renderList();
         });
     </script>
 </body>
