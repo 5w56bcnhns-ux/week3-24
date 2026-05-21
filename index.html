@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>每日心情打卡 - HTML 版</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', sans-serif; }
@@ -29,12 +28,10 @@
             <div class="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center text-white font-bold">M</div>
             <h1 class="font-serif font-medium text-lg">MoodTracker (Local)</h1>
         </div>
-        <div class="flex items-center">
-            <button onclick="handleAISummary()" id="aiBtn" class="flex items-center gap-2 bg-zinc-800 text-zinc-100 px-4 py-2 rounded-full font-medium hover:bg-zinc-700 transition-colors active:scale-95 border border-zinc-700 disabled:opacity-50 text-sm">
-                <i data-lucide="sparkles" class="w-4 h-4"></i>
-                <span id="aiBtnText">AI 摘要</span>
-            </button>
-        </div>
+        <button onclick="handleAISummary()" id="aiBtn" class="flex items-center gap-2 bg-stone-800 text-stone-100 px-4 py-2 rounded-full font-medium hover:bg-stone-700 transition-colors active:scale-95 border border-stone-700 disabled:opacity-50 text-sm shadow-sm">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+            <span id="aiBtnText">AI 摘要</span>
+        </button>
     </header>
 
     <main class="max-w-2xl mx-auto p-4 space-y-8">
@@ -134,6 +131,7 @@
         const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwftTrtMeDZwLgthxu1YeIe3DUQDHRv9V6VCAQEpmm3-BQYXRzVEEan3TCVx3zyVA7k/exec"; 
 
         // --- Configuration ---
+        const LS_KEY = "records";
         const PRESET_TAGS = ['工作', '學習', '社交', '家庭', '健康', '愛好', '天氣', '睡眠', '加班', '運動'];
 
         // --- State ---
@@ -142,37 +140,7 @@
         let currentImageUrl = "";
         let currentFilter = "all";
 
-        // --- Backend Sync Helpers ---
-        
-        function normalizeRecord(record) {
-            return {
-                id: record.id || record.ID || "",
-                createdAt: record.createdAt || record.CreatedAt || "",
-                content: record.content || record.Content || record.note || "",
-                category: record.category || record.Category || "其他",
-                likes: Number(record.likes !== undefined ? record.likes : (record.Likes || 0)),
-                status: record.status || record.Status || "active",
-                // 保留 MoodTracker 特有欄位以防報錯
-                mood: record.mood || record.Mood || "😊",
-                intensity: record.intensity || record.Intensity || 50,
-                tags: record.tags || record.Tags || [],
-                note: record.note || record.Note || record.content || record.Content || "",
-                imageUrl: record.imageUrl || record.ImageUrl || ""
-            };
-        }
-
-        async function fetchRecordsFromSheet() {
-            if (APPS_SCRIPT_URL.includes("PASTE")) return null;
-            try {
-                const res = await fetch(APPS_SCRIPT_URL);
-                const data = await res.json();
-                return Array.isArray(data.records) ? data.records.map(normalizeRecord) : null;
-            } catch (e) {
-                console.warn("從 Sheet 讀取失敗", e);
-                return null;
-            }
-        }
-
+        // --- Backend Sync Helper ---
         async function syncToSheet(payload) {
             if (APPS_SCRIPT_URL.includes("PASTE")) return;
             try {
@@ -189,77 +157,74 @@
             }
         }
 
-        // --- AI Helpers ---
-        
-        async function askAI(userPrompt) {
-            const res = await fetch(APPS_SCRIPT_URL, {
-                method: "POST",
-                headers: { "Content-Type": "text/plain" },
-                body: JSON.stringify({ action: "askAI", prompt: userPrompt })
-            });
-            const data = await res.json();
-            return data.result || data.error || "AI 冇回應";
+        // --- Data Normalization (融合 MoodTracker 欄位與 Sheet Header) ---
+        function normalizeRecord(record) {
+            return {
+                id: record.id || record.ID || "",
+                createdAt: record.createdAt || record.CreatedAt || "",
+                mood: record.mood || record.Mood || "😊",
+                intensity: Number(record.intensity !== undefined ? record.intensity : (record.Intensity || 50)),
+                tags: (record.tags || record.Tags) ? (Array.isArray(record.tags || record.Tags) ? (record.tags || record.Tags) : []) : [],
+                note: record.note || record.Note || record.content || record.Content || "", 
+                imageUrl: record.imageUrl || record.ImageUrl || "",
+                status: record.status || record.Status || "active",
+                // 保留要求的 Rant Wall 欄位以相容後端
+                category: record.category || record.Category || "其他",
+                likes: Number(record.likes !== undefined ? record.likes : (record.Likes || 0))
+            };
         }
 
-        async function handleAISummary() {
-            const btn = document.getElementById('aiBtn');
-            const text = document.getElementById('aiBtnText');
-            btn.disabled = true;
-            text.textContent = '思考中...';
+        // --- Fetch & Load (Requirement 1 & 2) ---
+        async function fetchRecordsFromSheet() {
+            if (APPS_SCRIPT_URL.includes("PASTE")) return null;
             try {
-                const records = await loadData();
-                if (records.length === 0) { alert('未有吐槽資料可以摘要'); return; }
-                
-                // 兼容吐槽牆與心情打卡的資料結構
-                const summaryInput = records.slice(0, 30).map(r =>
-                    `[${r.category !== "其他" ? r.category : (r.tags && r.tags.length ? r.tags.join(',') : '其他')}] ${r.content || r.note || ''}`
-                ).join('\n');
-                
-                const prompt = '以下是班級吐槽牆嘅留言。請用繁體中文，用 3-5 句概括同學最關心嘅問題、情緒同有冇明顯 patterns:\n\n' + summaryInput;
-                const result = await askAI(prompt);
-                alert(result);
+                const res = await fetch(APPS_SCRIPT_URL);
+                const data = await res.json();
+                // 兼容回傳 { records: [...] } 或 { data: [...] }
+                const recordsArray = data.records || data.data; 
+                return Array.isArray(recordsArray) ? recordsArray.map(normalizeRecord) : null;
             } catch (e) {
-                alert('AI 出錯：' + e.message);
-            } finally {
-                btn.disabled = false;
-                text.textContent = 'AI 摘要';
+                console.warn("從 Sheet 讀取失敗", e);
+                return null;
             }
         }
-
-        // --- Core Functions ---
 
         async function loadData() {
             const remote = await fetchRecordsFromSheet();
             if (remote) {
-                localStorage.setItem("records", JSON.stringify(remote));
+                localStorage.setItem(LS_KEY, JSON.stringify(remote));
                 return remote;
             }
-            const data = localStorage.getItem("records");
+            const data = localStorage.getItem(LS_KEY);
             return data ? JSON.parse(data) : [];
         }
 
         async function saveData(newRecord) {
             const records = await loadData();
-            records.unshift(newRecord); // 將新記錄加到最前以適應 Timeline 結構
-            localStorage.setItem("records", JSON.stringify(records));
+            records.unshift(newRecord); // 將新記錄加到最前
+            localStorage.setItem(LS_KEY, JSON.stringify(records));
             syncToSheet({ action: "create", record: newRecord });
             await renderList(records);
         }
 
+        // --- UI Rendering ---
         async function renderList(recordsOverride) {
             const records = recordsOverride || await loadData();
             const listContainer = document.getElementById('recordList');
             
+            // Filter and Sort
             let filtered = records;
             if (currentFilter !== "all") {
                 filtered = records.filter(r => r.status === currentFilter);
             }
 
+            // Group by status for sorting requirement: active top, done bottom
             filtered.sort((a, b) => {
                 if (a.status === b.status) return new Date(b.createdAt) - new Date(a.createdAt);
                 return a.status === "active" ? -1 : 1;
             });
 
+            // Update Counts
             const activeCount = records.filter(r => r.status === "active").length;
             const doneCount = records.filter(r => r.status === "done").length;
             document.getElementById('countActive').innerText = activeCount;
@@ -303,13 +268,12 @@
         }
 
         // --- Logic Assistants ---
-
         async function toggleRecordStatus(id) {
             const records = await loadData();
             const record = records.find(r => r.id === id);
             if (record) {
                 record.status = record.status === "active" ? "done" : "active";
-                localStorage.setItem("records", JSON.stringify(records));
+                localStorage.setItem(LS_KEY, JSON.stringify(records));
                 syncToSheet({ action: "update", id: record.id, changes: { status: record.status } });
                 await renderList(records);
             }
@@ -319,16 +283,56 @@
             if (!confirm("確定要刪除這條記錄嗎？")) return;
             const records = await loadData();
             const filtered = records.filter(r => r.id !== id);
-            localStorage.setItem("records", JSON.stringify(filtered));
+            localStorage.setItem(LS_KEY, JSON.stringify(filtered));
             syncToSheet({ action: "delete", id: id });
             await renderList(filtered);
         }
 
-        // --- Initialization & Listeners ---
+        // --- AI 摘要功能 (Requirement 4) ---
+        async function askAI(userPrompt) {
+            const res = await fetch(APPS_SCRIPT_URL, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify({ action: "askAI", prompt: userPrompt })
+            });
+            const data = await res.json();
+            return data.result || data.error || "AI 冇回應";
+        }
 
+        async function handleAISummary() {
+            const btn = document.getElementById('aiBtn');
+            const text = document.getElementById('aiBtnText');
+            btn.disabled = true;
+            text.textContent = '思考中...';
+            try {
+                const records = await loadData();
+                if (records.length === 0) { 
+                    alert('未有資料可以摘要'); 
+                    return; 
+                }
+                // 使用 record.note 或 record.content 生成提示
+                const summaryInput = records.slice(0, 30).map(r =>
+                    `[${r.mood} ${r.category || '心情'}] ${r.note || r.content || ''}`
+                ).join('\n');
+                
+                const prompt = '以下是班級吐槽牆/心情牆嘅留言。請用繁體中文，用 3-5 句概括同學最關心嘅問題、情緒同有冇明顯 patterns:\n\n' + summaryInput;
+                const result = await askAI(prompt);
+                alert(result);
+            } catch (e) {
+                alert('AI 出錯：' + e.message);
+            } finally {
+                btn.disabled = false;
+                text.textContent = 'AI 摘要';
+            }
+        }
+
+        // --- Initialization & Listeners ---
         window.onload = async () => {
             await renderList();
-            lucide.createIcons();
+            // 如果你有引入 lucide，這裡會執行；如果沒有則跳過，防止報錯
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
         };
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -394,7 +398,7 @@
                 document.getElementById('imagePreview').classList.add('hidden');
             });
 
-            // Form Submit (Async)
+            // Form Submit
             document.getElementById('moodForm').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 
@@ -405,10 +409,10 @@
                     intensity: parseInt(document.getElementById('intensity').value),
                     tags: [...selectedTags],
                     note: document.getElementById('note').value,
-                    content: document.getElementById('note').value, // 兼容寫入 content
                     imageUrl: currentImageUrl,
                     status: "active",
-                    likes: 0
+                    category: "心情", // 為兼容 Rant Wall contract
+                    likes: 0 // 為兼容 Rant Wall contract
                 };
 
                 await saveData(newRecord);
@@ -426,7 +430,7 @@
                 currentImageUrl = "";
             });
 
-            // Filter Management (Async)
+            // Filter Management
             document.querySelectorAll('.filter-btn').forEach(btn => {
                 btn.addEventListener('click', async () => {
                     document.querySelectorAll('.filter-btn').forEach(b => {
