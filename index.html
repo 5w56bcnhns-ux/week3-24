@@ -134,7 +134,6 @@
         const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwftTrtMeDZwLgthxu1YeIe3DUQDHRv9V6VCAQEpmm3-BQYXRzVEEan3TCVx3zyVA7k/exec"; 
 
         // --- Configuration ---
-        const LS_KEY = "records";
         const PRESET_TAGS = ['工作', '學習', '社交', '家庭', '健康', '愛好', '天氣', '睡眠', '加班', '運動'];
 
         // --- State ---
@@ -145,7 +144,6 @@
 
         // --- Backend Sync Helpers ---
         
-        // 統一前後端欄位差異 (同時保留 MoodTracker 需要的欄位以防報錯)
         function normalizeRecord(record) {
             return {
                 id: record.id || record.ID || "",
@@ -154,7 +152,7 @@
                 category: record.category || record.Category || "其他",
                 likes: Number(record.likes !== undefined ? record.likes : (record.Likes || 0)),
                 status: record.status || record.Status || "active",
-                // 保留 MoodTracker 特有欄位
+                // 保留 MoodTracker 特有欄位以防報錯
                 mood: record.mood || record.Mood || "😊",
                 intensity: record.intensity || record.Intensity || 50,
                 tags: record.tags || record.Tags || [],
@@ -210,7 +208,7 @@
             text.textContent = '思考中...';
             try {
                 const records = await loadData();
-                if (records.length === 0) { alert('未有資料可以摘要'); return; }
+                if (records.length === 0) { alert('未有吐槽資料可以摘要'); return; }
                 
                 // 兼容吐槽牆與心情打卡的資料結構
                 const summaryInput = records.slice(0, 30).map(r =>
@@ -225,7 +223,6 @@
             } finally {
                 btn.disabled = false;
                 text.textContent = 'AI 摘要';
-                if (typeof lucide !== 'undefined') lucide.createIcons();
             }
         }
 
@@ -234,17 +231,17 @@
         async function loadData() {
             const remote = await fetchRecordsFromSheet();
             if (remote) {
-                localStorage.setItem(LS_KEY, JSON.stringify(remote));
+                localStorage.setItem("records", JSON.stringify(remote));
                 return remote;
             }
-            const data = localStorage.getItem(LS_KEY);
+            const data = localStorage.getItem("records");
             return data ? JSON.parse(data) : [];
         }
 
         async function saveData(newRecord) {
             const records = await loadData();
-            records.unshift(newRecord); // 將新記錄加到最前
-            localStorage.setItem(LS_KEY, JSON.stringify(records));
+            records.unshift(newRecord); // 將新記錄加到最前以適應 Timeline 結構
+            localStorage.setItem("records", JSON.stringify(records));
             syncToSheet({ action: "create", record: newRecord });
             await renderList(records);
         }
@@ -312,7 +309,7 @@
             const record = records.find(r => r.id === id);
             if (record) {
                 record.status = record.status === "active" ? "done" : "active";
-                localStorage.setItem(LS_KEY, JSON.stringify(records));
+                localStorage.setItem("records", JSON.stringify(records));
                 syncToSheet({ action: "update", id: record.id, changes: { status: record.status } });
                 await renderList(records);
             }
@@ -322,7 +319,7 @@
             if (!confirm("確定要刪除這條記錄嗎？")) return;
             const records = await loadData();
             const filtered = records.filter(r => r.id !== id);
-            localStorage.setItem(LS_KEY, JSON.stringify(filtered));
+            localStorage.setItem("records", JSON.stringify(filtered));
             syncToSheet({ action: "delete", id: id });
             await renderList(filtered);
         }
@@ -331,7 +328,7 @@
 
         window.onload = async () => {
             await renderList();
-            if (typeof lucide !== 'undefined') lucide.createIcons();
+            lucide.createIcons();
         };
 
         document.addEventListener('DOMContentLoaded', () => {
